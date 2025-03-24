@@ -179,7 +179,8 @@ def bnb_verification(phone_number):
                 "message": _("Verification code generated and sent successfully."),
                 "data": {
                     "phone_number": phone_number,
-                    "verification_code": verification_code
+                    "verification_code": verification_code,
+                    "res":response
                 }
             }
         else:
