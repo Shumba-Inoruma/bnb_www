@@ -6,6 +6,7 @@ import requests
 import os
 from werkzeug.utils import secure_filename
 from frappe.utils.file_manager import save_file,delete_file
+from frappe.utils import now_datetime, time_diff_in_seconds
 
 
 # ---------------------------------------------this is the block for users-------------------------------------------------------
@@ -18,7 +19,7 @@ VERIFICATION_CODES = {
 }
 
 @frappe.whitelist(allow_guest=True)
-def create_user(email, first_name, last_name, password, role, phone_number, verification_code=None):
+def create_user(email, first_name, last_name, password, role, phone_number, verification_code):
     """Creates a new user in bnb_users and assigns a role, with email verification."""
     
     # Validation: Ensure role is valid
@@ -40,10 +41,10 @@ def create_user(email, first_name, last_name, password, role, phone_number, veri
         return
     
     # Check if the verification code matches the one in the dictionary
-    if VERIFICATION_CODES.get(email) != verification_code:
-        frappe.local.response["status_code"] = 400
-        frappe.local.response["message"] = _("Verification failed")
-        return
+    # if VERIFICATION_CODES.get(email) != verification_code:
+    #     frappe.local.response["status_code"] = 400
+    #     frappe.local.response["message"] = _("Verification failed")
+    #     return
 
     # Check if the phone number already exists in the custom bnb_users Doctype
     if frappe.db.exists('bnb_users', {'phone_number': phone_number}):
@@ -53,35 +54,86 @@ def create_user(email, first_name, last_name, password, role, phone_number, veri
      # Check if the phone number already exists in the custom bnb_users Doctype
     if frappe.db.exists('bnb_users', {'email': email}):
         frappe.local.response["status_code"] = 400
-        frappe.local.response["message"] = _("User with email {} already exists".format(email))
+        frappe.local.response["message"] = _("User with email {} already existss".format(email))
+        return
+    
+    res=verify_code(phone_number=phone_number,verification=verification_code)
+    print(res)
+    if res['status_code']==200:
+        try:
+            # Create the user in the custom bnb_users Doctype
+            user = frappe.get_doc({
+                "doctype": "bnb_users",
+                "email": email,
+                "first_name": first_name,
+                "last_name": last_name,
+                "phone_number": phone_number,
+                "enabled": 1,
+                "roles": [{"role": role}],  # Single role as a dictionary
+                "password": password  # Store the password directly
+            })
+            
+            # Insert the user (with password)
+            user.insert(ignore_permissions=True)
+
+            # Success response
+            frappe.local.response["status_code"] = 201
+            frappe.local.response["message"] = _("User created successfully: {0}".format(email))
+            frappe.local.response["data"] = {"user_email": email, "role": role}
+
+        except Exception as e:
+            frappe.local.response["status_code"] = 500
+            frappe.local.response["message"] = _("Failed to create user. Error: {0}".format(str(e)))
+            frappe.local.response["data"] = {}
+
+    else:
+        frappe.local.response["status_code"] = 400
+        frappe.local.response["message"] = _(res['message'])
         return
 
-    try:
-        # Create the user in the custom bnb_users Doctype
-        user = frappe.get_doc({
-            "doctype": "bnb_users",
-            "email": email,
-            "first_name": first_name,
-            "last_name": last_name,
-            "phone_number": phone_number,
-            "enabled": 1,
-            "roles": [{"role": role}],  # Single role as a dictionary
-            "password": password  # Store the password directly
-        })
-        
-        # Insert the user (with password)
-        user.insert(ignore_permissions=True)
 
-        # Success response
-        frappe.local.response["status_code"] = 201
-        frappe.local.response["message"] = _("User created successfully: {0}".format(email))
-        frappe.local.response["data"] = {"user_email": email, "role": role}
+
+
+@frappe.whitelist(allow_guest=True)
+def verify_code(phone_number: str, verification: str) -> dict:
+    try:
+        # Check if the verification entry exists
+        existing_verification = frappe.db.exists("bnb_verification", {
+            "phone_number": phone_number,
+            "verification_code": verification
+        })
+
+        if not existing_verification:
+            return {
+                'status_code': 404,
+                'message': 'Verification entry not found.'
+            }
+
+        # Fetch the creation time of the existing entry
+        creation_time = frappe.db.get_value('bnb_verification', existing_verification, 'creation_date')
+
+        # Calculate time difference in seconds
+        time_difference = time_diff_in_seconds(now_datetime(), creation_time)
+
+        fifteen_minutes_in_seconds = 15 * 60
+
+        if time_difference > fifteen_minutes_in_seconds:
+            print("mmm time")
+            return {
+                'status_code': 403,
+                'message': 'Verification code expired.'
+            }
+
+        return {
+            'status_code': 200,
+            'message': 'Verification successful.'
+        }
 
     except Exception as e:
-        frappe.local.response["status_code"] = 500
-        frappe.local.response["message"] = _("Failed to create user. Error: {0}".format(str(e)))
-        frappe.local.response["data"] = {}
-
+        return {
+            'status_code': 500,
+            'message': f'Error: {str(e)}'
+        }
 
 
 @frappe.whitelist(allow_guest=True)
@@ -100,29 +152,45 @@ def bnb_verification(phone_number):
 
     try:
         print("yessssssssssssss")
-        # Create a new verification entry
-        verification_entry = frappe.get_doc({
-            "doctype": "bnb_verification",
-            "phone_number": phone_number,
-            "verification_code": verification_code,
-            "creation_date": frappe.utils.now()
-        })
+        response=send_whatsapp_message(phone_number=phone_number,variable_value=verification_code)
+        print(response['status_code'])
+        
+        if str(response.get("status_code"))=="200":
 
-        # Insert the verification entry
-        verification_entry.insert(ignore_permissions=True)
-        verification_entry.save()
-
-        # Send the verification code via SMS (integrate SMS API here)
-        # Example: send_sms(phone_number, verification_code)
-
-        return {
-            "status_code": 200,
-            "message": _("Verification code generated and stored successfully."),
-            "data": {
+            # Create a new verification entry
+            verification_entry = frappe.get_doc({
+                "doctype": "bnb_verification",
                 "phone_number": phone_number,
-                "verification_code": verification_code
+                "verification_code": verification_code,
+                "creation_date": frappe.utils.now()
+            })
+
+            # Insert the verification entry
+            verification_entry.insert(ignore_permissions=True)
+            verification_entry.save()
+            
+                
+
+            # Send the verification code via SMS (integrate SMS API here)
+            # Example: send_sms(phone_number, verification_code)
+
+            return {
+                "status_code": 200,
+                "message": _("Verification code generated and sent successfully."),
+                "data": {
+                    "phone_number": phone_number,
+                    "verification_code": verification_code
+                }
             }
-        }
+        else:
+               return {
+                "status_code": 403,
+                "message": _("Please check the whatsapp number and verify"),
+                "data": {
+                    "phone_number": phone_number,
+                    "verification_code": verification_code
+                }
+            }
 
     except Exception as e:
         return {
@@ -138,10 +206,11 @@ FACEBOOK_PHONE_NUMBER_ID = '621029511088946'
 FACEBOOK_WHATSAPP_API_URL = 'https://graph.facebook.com/v16.0/{}/messages'.format(FACEBOOK_PHONE_NUMBER_ID)
 
 @frappe.whitelist(allow_guest=True)
-def send_whatsapp_message():
+def send_whatsapp_message(phone_number,variable_value):
+    print("yyyy")
 
-    phone_number="263786103016"
-    variable_value=2321
+    # phone_number="2637840999216"
+    # variable_value=2321
     """Sends a WhatsApp message with a predefined template from Facebook WhatsApp Cloud API."""
     
     # Your WhatsApp template name (approved template)
@@ -155,7 +224,7 @@ def send_whatsapp_message():
         "template": {
             "name": template_name,
             "language": {
-                "code": "en_US"  # Use the language code of the template
+                "code": "en"  # Use the language code of the template
             },
             "components": [
                 {
@@ -184,12 +253,7 @@ def send_whatsapp_message():
         # Check if the request was successful
         if response.status_code == 200:
             return {
-                "status_code": 200,
-                "message": _("WhatsApp message sent successfully."),
-                "data": {
-                    "phone_number": phone_number,
-                    "message_id": response.json().get("messages")[0].get("id")  # Get the message ID
-                }
+                "status_code": 200
             }
         else:
             error_message = response.json().get("error", {}).get("message", "Unknown error")
