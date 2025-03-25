@@ -7,7 +7,7 @@ import os
 from werkzeug.utils import secure_filename
 from frappe.utils.file_manager import save_file,delete_file
 from frappe.utils import now_datetime, time_diff_in_seconds
-
+import hashlib
 
 # ---------------------------------------------this is the block for users-------------------------------------------------------
 VALID_ROLES = ["bnb_agents", "bnb_clients", "bnb_property_owners"]
@@ -21,6 +21,7 @@ VERIFICATION_CODES = {
 @frappe.whitelist(allow_guest=True)
 def create_user(email, first_name, last_name, password, role, phone_number, verification_code):
     """Creates a new user in bnb_users and assigns a role, with email verification."""
+    phone_number=normalize_number(phone_number)
     
     # Validation: Ensure role is valid
     if role not in VALID_ROLES:
@@ -70,7 +71,7 @@ def create_user(email, first_name, last_name, password, role, phone_number, veri
                 "phone_number": phone_number,
                 "enabled": 1,
                 "roles": [{"role": role}],  # Single role as a dictionary
-                "password": password  # Store the password directly
+                "password": hashlib.sha256(password.encode()).hexdigest() # Store the password directly
             })
             
             # Insert the user (with password)
@@ -138,6 +139,7 @@ def verify_code(phone_number: str, verification: str) -> dict:
 
 @frappe.whitelist(allow_guest=True)
 def bnb_verification(phone_number):
+    phone_number=normalize_number(phone_number)
     """Generates a 4-digit verification code for the provided phone number, stores it in the 'bnb_verification' Doctype, and overrides if it exists."""
 
     # Generate a random 4-digit verification code
@@ -692,3 +694,124 @@ def get_images_by_listing(listing_name):
         frappe.local.response["message"] = _("Failed to retrieve images. Error: {0}".format(str(e)))
         frappe.local.response["data"] = {}
         frappe.log_error(f"Error during image retrieval for property {listing_name}: {str(e)}", "get_images_by_property")
+
+
+
+
+import frappe
+from frappe import _
+from frappe.utils.password import check_password
+
+@frappe.whitelist(allow_guest=True)
+def sign_in(identifier, password):
+    """
+    Authenticates a user using either email or phone number and password.
+    """
+    try:
+        # Identify the user by email or phone number
+        filters = {"email": identifier} if "@" in identifier else {"phone_number": identifier}
+        
+        user = frappe.get_all('bnb_users', filters=filters, fields=["name", "email", "phone_number", "password"])
+        
+        if not user:
+            return {"status_code": 404, "message": _("User not found."), "data": {}}
+        
+        user = user[0]  # Assuming only one matching user
+        
+        # Check password
+        try:
+            check_password(user['name'], password)
+        except frappe.AuthenticationError:
+            return {"status_code": 401, "message": _("Invalid credentials."), "data": {}}
+        
+        return {"status_code": 200, "message": _("Sign-in successful."), "data": {"email": user['email'], "phone_number": user['phone_number']}}
+    
+    except Exception as e:
+        return {"status_code": 500, "message": _("Sign-in failed. Error: {0}".format(str(e))), "data": {}}
+
+
+@frappe.whitelist(allow_guest=True)
+def sign_in(identifier, password):
+    """
+    Authenticates a user using either email or phone number and password.
+    """
+    try:
+        # Identify user by email or phone
+        filters = {"email": identifier} if "@" in identifier else {"phone_number": normalize_number(identifier)}
+        
+        user = frappe.get_all('bnb_users', filters=filters, fields=["name", "email", "phone_number", "password"])
+        
+        if not user:
+            return {"status_code": 404, "message": _("User not found."), "data": {}}
+        
+        user = user[0]  # Assuming only one matching user
+        
+        # Compare hashed input password with stored password
+        if  hashlib.sha256(password.encode()).hexdigest() != user['password']:
+            return {"status_code": 401, "message": _("Invalid credentials."), "data": {}}
+        
+        return {"status_code": 200, "message": _("Sign-in successful."), "data": {"email": user['email'], "phone_number": user['phone_number']}}
+    
+    except Exception as e:
+        return {"status_code": 500, "message": _("Sign-in failed. Error: {0}".format(str(e))), "data": {}}
+    
+
+def normalize_number(phone_number):
+        """
+        Normalizes a phone number based on the following rules:
+        1. If the number starts with '+', remove the '+'.
+        2. If the number starts with '07', replace '0' with '263'.
+        3. If it's a string, return an error message.
+
+        :param phone_number: str - The phone number to normalize.
+        :return: str - The normalized phone number or error message.
+        """
+        if not isinstance(phone_number, str):
+            return "Error: The phone number must be a string."
+
+        # Rule 1: Remove the '+' sign if it exists
+        if phone_number.startswith("+"):
+            return phone_number[1:]
+
+        # Rule 2: Replace '07' with '263'
+        elif phone_number.startswith("07"):
+            return "263" + phone_number[1:]
+
+        # If the number doesn't match the above cases, return the number as is
+        return phone_number
+
+
+@frappe.whitelist(allow_guest=True)
+def delete_user_by_email(email):
+    """Deletes a user from the bnb_users Doctype by email."""
+    
+    # Validation: Ensure email is provided
+    if not email:
+        frappe.local.response["status_code"] = 400
+        frappe.local.response["message"] = _("Email is a required field")
+        return
+    
+    # Check if the user exists in the 'bnb_users' Doctype
+    user = frappe.get_all('bnb_users', filters={'email': email}, fields=["name", "email"])
+    
+    if not user:
+        frappe.local.response["status_code"] = 404
+        frappe.local.response["message"] = _("No user found with the email: {}".format(email))
+        return
+    
+    try:
+        # Get the user document
+        user_doc = frappe.get_doc('bnb_users', user[0]["name"])
+        
+        # Delete the user
+        user_doc.delete()
+
+        # Success response
+        frappe.local.response["status_code"] = 200
+        frappe.local.response["message"] = _("User with email {} deleted successfully.".format(email))
+        frappe.local.response["data"] = {}
+
+    except Exception as e:
+        frappe.local.response["status_code"] = 500
+        frappe.local.response["message"] = _("Failed to delete user. Error: {0}".format(str(e)))
+        frappe.local.response["data"] = {}
