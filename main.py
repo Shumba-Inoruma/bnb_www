@@ -61,6 +61,7 @@ def create_user(email, first_name, last_name, password, role, phone_number, veri
     res=verify_code(phone_number=phone_number,verification=verification_code)
     print(res)
     if res['status_code']==200:
+        print(role)
         try:
             # Create the user in the custom bnb_users Doctype
             user = frappe.get_doc({
@@ -70,7 +71,7 @@ def create_user(email, first_name, last_name, password, role, phone_number, veri
                 "last_name": last_name,
                 "phone_number": phone_number,
                 "enabled": 1,
-                "roles": [{"role": role}],  # Single role as a dictionary
+                "role": role,  # Single role as a dictionary
                 "password": hashlib.sha256(password.encode()).hexdigest() # Store the password directly
             })
             
@@ -421,11 +422,11 @@ def get_all_bnb_listings():
         frappe.local.response["data"] = {}
 
 @frappe.whitelist(allow_guest=True)
-def get_bnb_listing_by_name(listing_name):
+def get_bnb_listing_by_name(name):
     """Fetches a property (listing) by its listing_name (ID) from the bnb_listings Doctype."""
     try:
         # Fetch the property based on the listing_name
-        listing = frappe.get_all('bnb_listings', filters={'name': listing_name}, fields=["name", "listing_name", "location", "price", "service", "description"])
+        listing = frappe.get_all('bnb_listings', filters={'name': name}, fields=["name", "listing_name", "location", "price", "service", "description"])
         
         # Check if the listing exists
         if not listing:
