@@ -155,7 +155,7 @@ def bnb_verification(phone_number):
 
     try:
         print("yessssssssssssss")
-        response=send_whatsapp_message(phone_number=phone_number,variable_value=verification_code)
+        response=send_whatsapp_messages(phone_number=phone_number,variable_value=verification_code)
         print(response['status_code'])
         
         if str(response.get("status_code"))=="200":
@@ -210,8 +210,10 @@ FACEBOOK_PHONE_NUMBER_ID = '621029511088946'
 FACEBOOK_WHATSAPP_API_URL = 'https://graph.facebook.com/v16.0/{}/messages'.format(FACEBOOK_PHONE_NUMBER_ID)
 
 @frappe.whitelist(allow_guest=True)
-def send_whatsapp_message(phone_number,variable_value):
+def send_whatsapp_messages(phone_number,variable_value):
     print("yyyy")
+    phone_number='263786103016'
+    variable_value='0000'
 
     # phone_number="2637840999216"
     # variable_value=2321
